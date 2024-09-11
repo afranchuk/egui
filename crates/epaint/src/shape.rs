@@ -4,7 +4,7 @@ use std::{any::Any, sync::Arc};
 
 use crate::{
     stroke::PathStroke,
-    text::{FontId, Fonts, Galley},
+    text::{FontId, Fonts, Galley, StringId, StringManager},
     Color32, Mesh, Stroke, TextureId,
 };
 use emath::{pos2, Align2, Pos2, Rangef, Rect, TSTransform, Vec2};
@@ -273,14 +273,15 @@ impl Shape {
 
     #[allow(clippy::needless_pass_by_value)]
     pub fn text(
+        string_manager: &impl StringManager,
         fonts: &Fonts,
         pos: Pos2,
         anchor: Align2,
-        text: impl ToString,
+        text: StringId,
         font_id: FontId,
         color: Color32,
     ) -> Self {
-        let galley = fonts.layout_no_wrap(text.to_string(), font_id, color);
+        let galley = fonts.layout_no_wrap(string_manager, text, font_id, color);
         let rect = anchor.anchor_size(pos, galley.size());
         Self::galley(rect.min, galley, color)
     }

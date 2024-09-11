@@ -5,7 +5,7 @@ use emath::{pos2, vec2, Align, NumExt, Pos2, Rect, Vec2};
 
 use crate::{stroke::PathStroke, text::font::Font, Color32, Mesh, Stroke, Vertex};
 
-use super::{FontsImpl, Galley, Glyph, LayoutJob, LayoutSection, Row, RowVisuals};
+use super::{FontsImpl, Galley, Glyph, LayoutJob, LayoutSection, Row, RowVisuals, StringManager};
 
 // ----------------------------------------------------------------------------
 
@@ -69,7 +69,7 @@ impl Paragraph {
 ///
 /// In most cases you should use [`crate::Fonts::layout_job`] instead
 /// since that memoizes the input, making subsequent layouting of the same text much faster.
-pub fn layout(fonts: &mut FontsImpl, job: Arc<LayoutJob>) -> Galley {
+pub fn layout(string_manager: &impl StringManager, fonts: &mut FontsImpl, job: Arc<LayoutJob>) -> Galley {
     if job.wrap.max_rows == 0 {
         // Early-out: no text
         return Galley {
@@ -88,7 +88,7 @@ pub fn layout(fonts: &mut FontsImpl, job: Arc<LayoutJob>) -> Galley {
 
     let mut paragraphs = vec![Paragraph::from_section_index(0)];
     for (section_index, section) in job.sections.iter().enumerate() {
-        layout_section(fonts, &job, section_index as u32, section, &mut paragraphs);
+        layout_section(string_manager, fonts, &job, section_index as u32, section, &mut paragraphs);
     }
 
     let point_scale = PointScale::new(fonts.pixels_per_point());
@@ -127,6 +127,7 @@ pub fn layout(fonts: &mut FontsImpl, job: Arc<LayoutJob>) -> Galley {
 
 // Ignores the Y coordinate.
 fn layout_section(
+    manager: &impl StringManager,
     fonts: &mut FontsImpl,
     job: &LayoutJob,
     section_index: u32,
@@ -135,7 +136,7 @@ fn layout_section(
 ) {
     let LayoutSection {
         leading_space,
-        byte_range,
+        text,
         format,
     } = section;
     let font = fonts.font(&format.font_id);
@@ -154,7 +155,7 @@ fn layout_section(
 
     let mut last_glyph_id = None;
 
-    for chr in job.text[byte_range.clone()].chars() {
+    for chr in manager.chars(*text) {
         if job.break_on_newline && chr == '\n' {
             out_paragraphs.push(Paragraph::from_section_index(section_index));
             paragraph = out_paragraphs.last_mut().unwrap();
@@ -1031,17 +1032,19 @@ mod tests {
 
     #[test]
     fn test_zero_max_width() {
+        let mut manager = OwningStringManager::default();
         let mut fonts = FontsImpl::new(1.0, 1024, FontDefinitions::default());
-        let mut layout_job = LayoutJob::single_section("W".into(), TextFormat::default());
+        let mut layout_job = LayoutJob::single_section(manager.string("W"), TextFormat::default());
         layout_job.wrap.max_width = 0.0;
-        let galley = layout(&mut fonts, layout_job.into());
+        let galley = layout(&manager, &mut fonts, layout_job.into());
         assert_eq!(galley.rows.len(), 1);
     }
 
     #[test]
     fn test_truncate_with_newline() {
         // No matter where we wrap, we should be appending the newline character.
-
+        
+        let mut manager = OwningStringManager::default();
         let mut fonts = FontsImpl::new(1.0, 1024, FontDefinitions::default());
         let text_format = TextFormat {
             font_id: FontId::monospace(12.0),
@@ -1052,12 +1055,12 @@ mod tests {
             for break_anywhere in [false, true] {
                 for max_width in [0.0, 5.0, 10.0, 20.0, f32::INFINITY] {
                     let mut layout_job =
-                        LayoutJob::single_section(text.into(), text_format.clone());
+                        LayoutJob::single_section(manager.string(text), text_format.clone());
                     layout_job.wrap.max_width = max_width;
                     layout_job.wrap.max_rows = 1;
                     layout_job.wrap.break_anywhere = break_anywhere;
 
-                    let galley = layout(&mut fonts, layout_job.into());
+                    let galley = layout(&manager, &mut fonts, layout_job.into());
 
                     assert!(galley.elided);
                     assert_eq!(galley.rows.len(), 1);
@@ -1071,12 +1074,12 @@ mod tests {
         }
 
         {
-            let mut layout_job = LayoutJob::single_section("Hello\nworld".into(), text_format);
+            let mut layout_job = LayoutJob::single_section(manager.string("Hello\nworld"), text_format);
             layout_job.wrap.max_width = 50.0;
             layout_job.wrap.max_rows = 1;
             layout_job.wrap.break_anywhere = false;
 
-            let galley = layout(&mut fonts, layout_job.into());
+            let galley = layout(&manager, &mut fonts, layout_job.into());
 
             assert!(galley.elided);
             assert_eq!(galley.rows.len(), 1);
@@ -1087,13 +1090,14 @@ mod tests {
 
     #[test]
     fn test_cjk() {
+        let mut manager = OwningStringManager::default();
         let mut fonts = FontsImpl::new(1.0, 1024, FontDefinitions::default());
         let mut layout_job = LayoutJob::single_section(
-            "日本語とEnglishの混在した文章".into(),
+            manager.string("日本語とEnglishの混在した文章"),
             TextFormat::default(),
         );
         layout_job.wrap.max_width = 90.0;
-        let galley = layout(&mut fonts, layout_job.into());
+        let galley = layout(&manager, &mut fonts, layout_job.into());
         assert_eq!(
             galley.rows.iter().map(|row| row.text()).collect::<Vec<_>>(),
             vec!["日本語と", "Englishの混在", "した文章"]
@@ -1102,13 +1106,14 @@ mod tests {
 
     #[test]
     fn test_pre_cjk() {
+        let mut manager = OwningStringManager::default();
         let mut fonts = FontsImpl::new(1.0, 1024, FontDefinitions::default());
         let mut layout_job = LayoutJob::single_section(
-            "日本語とEnglishの混在した文章".into(),
+            manager.string("日本語とEnglishの混在した文章"),
             TextFormat::default(),
         );
         layout_job.wrap.max_width = 110.0;
-        let galley = layout(&mut fonts, layout_job.into());
+        let galley = layout(&manager, &mut fonts, layout_job.into());
         assert_eq!(
             galley.rows.iter().map(|row| row.text()).collect::<Vec<_>>(),
             vec!["日本語とEnglish", "の混在した文章"]
@@ -1117,12 +1122,13 @@ mod tests {
 
     #[test]
     fn test_truncate_width() {
+        let mut manager = OwningStringManager::default();
         let mut fonts = FontsImpl::new(1.0, 1024, FontDefinitions::default());
         let mut layout_job =
-            LayoutJob::single_section("# DNA\nMore text".into(), TextFormat::default());
+            LayoutJob::single_section(manager.string("# DNA\nMore text"), TextFormat::default());
         layout_job.wrap.max_width = f32::INFINITY;
         layout_job.wrap.max_rows = 1;
-        let galley = layout(&mut fonts, layout_job.into());
+        let galley = layout(&manager, &mut fonts, layout_job.into());
         assert!(galley.elided);
         assert_eq!(
             galley.rows.iter().map(|row| row.text()).collect::<Vec<_>>(),

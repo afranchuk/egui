@@ -4,7 +4,7 @@ use crate::{
     mutex::{Mutex, MutexGuard},
     text::{
         font::{Font, FontImpl},
-        Galley, LayoutJob,
+        Galley, LayoutJob, StringManager, StringId,
     },
     TextureAtlas,
 };
@@ -492,8 +492,8 @@ impl Fonts {
     ///
     /// The implementation uses memoization so repeated calls are cheap.
     #[inline]
-    pub fn layout_job(&self, job: LayoutJob) -> Arc<Galley> {
-        self.lock().layout_job(job)
+    pub fn layout_job(&self, string_manager: &impl StringManager, job: LayoutJob) -> Arc<Galley> {
+        self.lock().layout_job(string_manager, job)
     }
 
     pub fn num_galleys_in_cache(&self) -> usize {
@@ -513,13 +513,14 @@ impl Fonts {
     /// The implementation uses memoization so repeated calls are cheap.
     pub fn layout(
         &self,
-        text: String,
+        string_manager: &impl StringManager,
+        text: StringId,
         font_id: FontId,
         color: crate::Color32,
         wrap_width: f32,
     ) -> Arc<Galley> {
         let job = LayoutJob::simple(text, font_id, color, wrap_width);
-        self.layout_job(job)
+        self.layout_job(string_manager, job)
     }
 
     /// Will line break at `\n`.
@@ -527,12 +528,13 @@ impl Fonts {
     /// The implementation uses memoization so repeated calls are cheap.
     pub fn layout_no_wrap(
         &self,
-        text: String,
+        string_manager: &impl StringManager,
+        text: StringId,
         font_id: FontId,
         color: crate::Color32,
     ) -> Arc<Galley> {
         let job = LayoutJob::simple(text, font_id, color, f32::INFINITY);
-        self.layout_job(job)
+        self.layout_job(string_manager, job)
     }
 
     /// Like [`Self::layout`], made for when you want to pick a color for the text later.
@@ -540,11 +542,12 @@ impl Fonts {
     /// The implementation uses memoization so repeated calls are cheap.
     pub fn layout_delayed_color(
         &self,
-        text: String,
+        string_manager: &impl StringManager,
+        text: StringId,
         font_id: FontId,
         wrap_width: f32,
     ) -> Arc<Galley> {
-        self.layout(text, font_id, crate::Color32::PLACEHOLDER, wrap_width)
+        self.layout(string_manager, text, font_id, crate::Color32::PLACEHOLDER, wrap_width)
     }
 }
 
@@ -556,8 +559,8 @@ pub struct FontsAndCache {
 }
 
 impl FontsAndCache {
-    fn layout_job(&mut self, job: LayoutJob) -> Arc<Galley> {
-        self.galley_cache.layout(&mut self.fonts, job)
+    fn layout_job(&mut self, string_manager: &impl StringManager, job: LayoutJob) -> Arc<Galley> {
+        self.galley_cache.layout(string_manager, &mut self.fonts, job)
     }
 }
 
@@ -674,7 +677,7 @@ struct GalleyCache {
 }
 
 impl GalleyCache {
-    fn layout(&mut self, fonts: &mut FontsImpl, job: LayoutJob) -> Arc<Galley> {
+    fn layout(&mut self, string_manager: &impl StringManager, fonts: &mut FontsImpl, job: LayoutJob) -> Arc<Galley> {
         let hash = crate::util::hash(&job); // TODO(emilk): even faster hasher?
 
         match self.cache.entry(hash) {
@@ -684,7 +687,7 @@ impl GalleyCache {
                 cached.galley.clone()
             }
             std::collections::hash_map::Entry::Vacant(entry) => {
-                let galley = super::layout(fonts, job.into());
+                let galley = super::layout(string_manager, fonts, job.into());
                 let galley = Arc::new(galley);
                 entry.insert(CachedGalley {
                     last_used: self.generation,

@@ -11,6 +11,8 @@ use super::{
 use crate::{Color32, FontId, Mesh, Stroke};
 use emath::{pos2, vec2, Align, NumExt, OrderedFloat, Pos2, Rect, Vec2};
 
+pub type StringId = usize;
+
 /// Describes the task of laying out text.
 ///
 /// This supports mixing different fonts, color and formats (underline etc).
@@ -19,11 +21,12 @@ use emath::{pos2, vec2, Align, NumExt, OrderedFloat, Pos2, Rect, Vec2};
 ///
 /// ## Example:
 /// ```
-/// use epaint::{Color32, text::{LayoutJob, TextFormat}, FontFamily, FontId};
+/// use epaint::{Color32, text::{LayoutJob, TextFormat, OwningStringManager}, FontFamily, FontId};
 ///
+/// let mut manager = OwningStringManager::default();
 /// let mut job = LayoutJob::default();
 /// job.append(
-///     "Hello ",
+///     manager.string("Hello "),
 ///     0.0,
 ///     TextFormat {
 ///         font_id: FontId::new(14.0, FontFamily::Proportional),
@@ -32,7 +35,7 @@ use emath::{pos2, vec2, Align, NumExt, OrderedFloat, Pos2, Rect, Vec2};
 ///     },
 /// );
 /// job.append(
-///     "World!",
+///     manager.string("World!"),
 ///     0.0,
 ///     TextFormat {
 ///         font_id: FontId::new(14.0, FontFamily::Monospace),
@@ -47,9 +50,6 @@ use emath::{pos2, vec2, Align, NumExt, OrderedFloat, Pos2, Rect, Vec2};
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct LayoutJob {
-    /// The complete text of this job, referenced by [`LayoutSection`].
-    pub text: String,
-
     /// The different section, which can have different fonts, colors, etc.
     pub sections: Vec<LayoutSection>,
 
@@ -87,7 +87,6 @@ impl Default for LayoutJob {
     #[inline]
     fn default() -> Self {
         Self {
-            text: Default::default(),
             sections: Default::default(),
             wrap: Default::default(),
             first_row_min_height: 0.0,
@@ -102,14 +101,13 @@ impl Default for LayoutJob {
 impl LayoutJob {
     /// Break on `\n` and at the given wrap width.
     #[inline]
-    pub fn simple(text: String, font_id: FontId, color: Color32, wrap_width: f32) -> Self {
+    pub fn simple(text: StringId, font_id: FontId, color: Color32, wrap_width: f32) -> Self {
         Self {
             sections: vec![LayoutSection {
                 leading_space: 0.0,
-                byte_range: 0..text.len(),
+                text,
                 format: TextFormat::simple(font_id, color),
             }],
-            text,
             wrap: TextWrapping {
                 max_width: wrap_width,
                 ..Default::default()
@@ -121,14 +119,13 @@ impl LayoutJob {
 
     /// Does not break on `\n`, but shows the replacement character instead.
     #[inline]
-    pub fn simple_singleline(text: String, font_id: FontId, color: Color32) -> Self {
+    pub fn simple_singleline(text: StringId, font_id: FontId, color: Color32) -> Self {
         Self {
             sections: vec![LayoutSection {
                 leading_space: 0.0,
-                byte_range: 0..text.len(),
+                text,
                 format: TextFormat::simple(font_id, color),
             }],
-            text,
             wrap: Default::default(),
             break_on_newline: false,
             ..Default::default()
@@ -136,14 +133,13 @@ impl LayoutJob {
     }
 
     #[inline]
-    pub fn single_section(text: String, format: TextFormat) -> Self {
+    pub fn single_section(text: StringId, format: TextFormat) -> Self {
         Self {
             sections: vec![LayoutSection {
                 leading_space: 0.0,
-                byte_range: 0..text.len(),
+                text,
                 format,
             }],
-            text,
             wrap: Default::default(),
             break_on_newline: true,
             ..Default::default()
@@ -156,13 +152,10 @@ impl LayoutJob {
     }
 
     /// Helper for adding a new section when building a [`LayoutJob`].
-    pub fn append(&mut self, text: &str, leading_space: f32, format: TextFormat) {
-        let start = self.text.len();
-        self.text += text;
-        let byte_range = start..self.text.len();
+    pub fn append(&mut self, text: StringId, leading_space: f32, format: TextFormat) {
         self.sections.push(LayoutSection {
             leading_space,
-            byte_range,
+            text,
             format,
         });
     }
@@ -193,7 +186,6 @@ impl std::hash::Hash for LayoutJob {
     #[inline]
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         let Self {
-            text,
             sections,
             wrap,
             first_row_min_height,
@@ -203,7 +195,6 @@ impl std::hash::Hash for LayoutJob {
             round_output_size_to_nearest_ui_point,
         } = self;
 
-        text.hash(state);
         sections.hash(state);
         wrap.hash(state);
         emath::OrderedFloat(*first_row_min_height).hash(state);
@@ -222,8 +213,7 @@ pub struct LayoutSection {
     /// Can be used for first row indentation.
     pub leading_space: f32,
 
-    /// Range into the galley text
-    pub byte_range: Range<usize>,
+    pub text: StringId,
 
     pub format: TextFormat,
 }
@@ -233,11 +223,11 @@ impl std::hash::Hash for LayoutSection {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         let Self {
             leading_space,
-            byte_range,
+            text,
             format,
         } = self;
         OrderedFloat(*leading_space).hash(state);
-        byte_range.hash(state);
+        text.hash(state);
         format.hash(state);
     }
 }
@@ -690,37 +680,9 @@ impl Galley {
         self.job.is_empty()
     }
 
-    /// The full, non-elided text of the input job.
-    #[inline]
-    pub fn text(&self) -> &str {
-        &self.job.text
-    }
-
     #[inline]
     pub fn size(&self) -> Vec2 {
         self.rect.size()
-    }
-}
-
-impl AsRef<str> for Galley {
-    #[inline]
-    fn as_ref(&self) -> &str {
-        self.text()
-    }
-}
-
-impl std::borrow::Borrow<str> for Galley {
-    #[inline]
-    fn borrow(&self) -> &str {
-        self.text()
-    }
-}
-
-impl std::ops::Deref for Galley {
-    type Target = str;
-    #[inline]
-    fn deref(&self) -> &str {
-        self.text()
     }
 }
 
